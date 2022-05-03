@@ -5,6 +5,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -25,14 +26,30 @@ namespace GTAGameFilter
         ObservableCollection<Packet> packets = new ObservableCollection<Packet>();
         Thread ipSeenUpdateThread;
         bool _running = false;
+        AppSettingsCache appSettingsCache = AppSettingsCache.Instance;
+        IpListing self;
+
+        bool FriendsOnly
+        {
+            get { return (bool)GetValue(FriendsOnlyProperty); }
+            set { SetValue(FriendsOnlyProperty, value); }
+        }
+
+        public static readonly DependencyProperty FriendsOnlyProperty =
+            DependencyProperty.Register("FriendsOnly", typeof(bool), typeof(MainWindow));
         public MainWindow()
         {
+            FriendsOnly = false;
             InitializeComponent();
+            accept_friends_cb.DataContext = appSettingsCache;
+            push_friends_cb.DataContext = appSettingsCache;
+            friend_only_btn.DataContext = this;
             sniffer = new PacketSniffer();
             Loaded += MainWindow_Loaded;
             Unloaded += MainWindow_Unloaded;
+            Closed += MainWindow_Closed;
             session_ip_view.ItemsSource = session_ips;
-            friend_list_view.ItemsSource = session_ips;
+            friend_list_view.ItemsSource = appSettingsCache.FriendsListCollection;
             ipSeenUpdateThread = new Thread(async () => {
                 while (_running)
                 {
@@ -41,7 +58,7 @@ namespace GTAGameFilter
                         await Task.Delay(1 * 1000);
                         foreach (var kvp in session_ips)
                         {
-                            await Dispatcher.BeginInvoke(() => kvp.Value.RefreshActiveStatus());
+                            await Dispatcher.BeginInvoke(new Action(() => kvp.Value.RefreshActiveStatus()));
                         }
                     }
                     catch (TaskCanceledException e) { }
@@ -49,11 +66,15 @@ namespace GTAGameFilter
             });
         }
 
-        private void MainWindow_Unloaded(object sender, RoutedEventArgs e)
+        private void MainWindow_Closed(object? sender, EventArgs e)
         {
             _running = false;
             sniffer.OnPacketRecieved -= Sniffer_OnPacketRecieved;
             sniffer.Stop();
+        }
+
+        private void MainWindow_Unloaded(object sender, RoutedEventArgs e)
+        {
         }
 
         private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -68,19 +89,19 @@ namespace GTAGameFilter
 
         private void AddSessionIp(string ipAddress)
         {
-            Dispatcher.BeginInvoke(() =>
+            Dispatcher.BeginInvoke(new Action(() =>
             {
                 if (!session_ips.ContainsKey(ipAddress))
                 {
                     session_ips.Add(ipAddress, new IpListing(ipAddress));
                 }
                 session_ips[ipAddress].LastSeen = DateTimeOffset.Now;
-            });
+            }));
         }
 
         private void AddSessionIp(IpListing listing)
         {
-            Dispatcher.BeginInvoke(() =>
+            Dispatcher.BeginInvoke(new Action(() =>
             {
                 if (!session_ips.ContainsKey(listing.IpAddress))
                 {
@@ -90,16 +111,21 @@ namespace GTAGameFilter
                 {
                     session_ips[listing.IpAddress].Update(listing);
                 }
-            });
+            }));
         }
 
         private async void Sniffer_OnPacketRecieved(object sender, PacketRecievedEventArgs e)
         {
-            e.Packet.IsAllowed = true;
+            var src = e.Packet.SrcAddress;
+            var dst = e.Packet.DestAddress;
+            e.Packet.IsAllowed = !FriendsOnly || (src == self.IpAddress
+                || dst == self.IpAddress
+                || appSettingsCache._friendsList.Any(a => a.IpAddress.CompareTo(src) == 0 || a.IpAddress.CompareTo(dst) == 0));
             packets.Add(e.Packet);
             AddSessionIp(e.Packet.SrcAddress);
             AddSessionIp(e.Packet.DestAddress);
         }
+
         private void GetLocalIpAddress()
         {
             new Thread(() =>
@@ -108,10 +134,12 @@ namespace GTAGameFilter
                 {
                     socket.Connect("8.8.8.8", 65530);
                     IPEndPoint? endPoint = socket.LocalEndPoint as IPEndPoint;
-                    Dispatcher.BeginInvoke(() =>
+                    Dispatcher.BeginInvoke(new Action(() =>
                     {
-                        local_ip_view.Text = endPoint?.Address.ToString();
-                    });
+                        self = new IpListing(endPoint?.Address.ToString());
+                        local_ip_view.Text = self.IpAddress;
+                        
+                    }));
                 }
             }).Start();
         }
@@ -131,10 +159,21 @@ namespace GTAGameFilter
                 int last = address.LastIndexOf("</body>");
                 address = address.Substring(first, last - first);
 
-                Dispatcher.BeginInvoke(() =>
+                Dispatcher.BeginInvoke(new Action(() =>
                 {
                     public_ip_view.Text = address;
-                });
+                    if (!appSettingsCache.FriendsListCollection.ContainsKey(address))
+                    {
+                        var ipListing = new IpListing(address);
+                        FriendListPromptDialog result = FriendListPromptDialog.Prompt(this, "", FriendListPromptDialog.DialogType.UserName, "What is your user name?");
+                        if (result is null)
+                            return;
+
+                        ipListing.UserName = result.UsernameResponse;
+                        AddSessionIp(ipListing);
+                        AddFriend(ipListing);
+                    }
+                }));
             }).Start();
         }
 
@@ -192,6 +231,19 @@ namespace GTAGameFilter
                 }
             }
         }
+
+        private void AddFriend(IpListing ipListing)
+        {
+            ipListing.IsFriend = true;
+            appSettingsCache.FriendsListCollection[ipListing.IpAddress] = ipListing;
+        }
+
+        private void RemoveFriend(IpListing ipListing)
+        {
+            ipListing.IsFriend = false;
+            appSettingsCache.FriendsListCollection.Remove(ipListing.IpAddress);
+        }
+
         private void Sort(ListView lv, string sortBy, ListSortDirection direction)
         {
             ICollectionView dataView =
@@ -218,7 +270,7 @@ namespace GTAGameFilter
                 return;
             
             ipListing.UserName = result.UsernameResponse;
-            ipListing.IsFriend = true;
+            AddFriend(ipListing);
 
             Debug.WriteLine(string.Format("Added friend: {0}", ipListing.Serialize()));
         }
@@ -230,10 +282,10 @@ namespace GTAGameFilter
                 return;
             var ipListing = new IpListing(result.IpAddressResponse)
             {
-                UserName = result.UsernameResponse,
-                IsFriend = true
+                UserName = result.UsernameResponse
             };
             AddSessionIp(ipListing);
+            AddFriend(ipListing);   
 
             Debug.WriteLine(string.Format("Added friend: {0}", ipListing.Serialize()));
         }
@@ -243,10 +295,20 @@ namespace GTAGameFilter
             if (friend_list_view.SelectedItem is null)
                 return;
 
-            var ipListing = ((KeyValuePair<string, IpListing>)session_ip_view.SelectedItem).Value;
-            ipListing.IsFriend = false;
+            var ipListing = ((KeyValuePair<string, IpListing>)friend_list_view.SelectedItem).Value;
+            RemoveFriend(ipListing);
 
             Debug.WriteLine(string.Format("Removed friend: {0}", ipListing.Serialize()));
+        }
+
+        private void push_friends_list_button_Click(object sender, RoutedEventArgs e)
+        {
+
+        }
+
+        private void friend_only_btn_Click(object sender, RoutedEventArgs e)
+        {
+            FriendsOnly = !FriendsOnly;
         }
     }
 }

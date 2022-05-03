@@ -57,4 +57,27 @@ namespace GTAGameFilter
             return 0;
         }
     }
+    public class FriendOnlyModeTextConverter : IValueConverter
+    {
+        public object Convert(object friends_only, Type targetType, object parameter, System.Globalization.CultureInfo culture)
+        {
+            if (friends_only is bool)
+            {
+                if ((bool)friends_only)
+                {
+                    return "Toggle Friend Only Mode (On)";
+                }
+                else
+                {
+                    return "Toggle Friend Only Mode (Off)";
+                }
+            }
+            return "??";
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
+        {
+            return false;
+        }
+    }
 }

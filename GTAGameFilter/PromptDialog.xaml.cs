@@ -25,13 +25,12 @@ namespace GTAGameFilter
             UserNameIpAddress
         }
 
-
-        public FriendListPromptDialog(string defaultUsername, DialogType type)
+        public FriendListPromptDialog(string defaultUsername, DialogType type, string desc)
         {
             InitializeComponent();
             this.Loaded += new RoutedEventHandler(PromptDialog_Loaded);
             Title = "Add new Friend";
-            description_view.Text = "Provide Friend information";
+            description_view.Text = desc;
             username_view.Text = defaultUsername;
             ip_address_view.Text = "";
             if (type == DialogType.UserName)
@@ -43,9 +42,9 @@ namespace GTAGameFilter
             username_view.Focus();
         }
 
-        public static FriendListPromptDialog Prompt(Window owner, string defaultUsername, DialogType type = DialogType.UserName)
+        public static FriendListPromptDialog Prompt(Window owner, string defaultUsername, DialogType type = DialogType.UserName, string desc = "Provide Friend information")
         {
-            FriendListPromptDialog inst = new FriendListPromptDialog(defaultUsername, type);
+            var inst = new FriendListPromptDialog(defaultUsername, type, desc);
             inst.Owner = owner;
             inst.ShowDialog();
             if (inst.DialogResult == true)
@@ -53,9 +52,9 @@ namespace GTAGameFilter
             return null;
         }
 
-        public static FriendListPromptDialog Prompt(Window owner, DialogType type = DialogType.UserName)
+        public static FriendListPromptDialog Prompt(Window owner, DialogType type = DialogType.UserName, string desc = "Provide Friend information")
         {
-            return Prompt(owner, "", type);
+            return Prompt(owner, "", type, desc);
         }
 
         public string UsernameResponse

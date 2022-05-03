@@ -39,6 +39,7 @@ namespace GTAGameFilter
                 propertyChanged("UserName");
             }
         }
+
         private string _ipAddress;
         public string IpAddress
         {
@@ -52,6 +53,7 @@ namespace GTAGameFilter
                 propertyChanged("IpAddress");
             }
         }
+
         private bool _isFriend;
         [JsonIgnore]
         public bool IsFriend
@@ -66,6 +68,7 @@ namespace GTAGameFilter
                 propertyChanged("IsFriend");
             }
         }
+
         private DateTimeOffset _lastSeen;
         [JsonIgnore]
         public DateTimeOffset LastSeen
@@ -79,6 +82,7 @@ namespace GTAGameFilter
                 _lastSeen = value;
             }
         }
+
         [JsonIgnore]
         public bool IsActive
         {
