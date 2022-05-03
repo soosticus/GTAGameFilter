@@ -73,6 +73,7 @@ namespace GTAGameFilter
 
         public void Stop()
         {
+            s_running = false;
             thread.Join();
             WinDivert.WinDivertClose(handle);
         }
@@ -99,97 +100,94 @@ namespace GTAGameFilter
 
             do
             {
-                if (s_running)
+                packetData = null;
+
+                readLen = 0;
+
+                recvAsyncIoLen = 0;
+                recvOverlapped = new NativeOverlapped();
+
+                recvEvent = Kernel32.CreateEvent(IntPtr.Zero, false, false, IntPtr.Zero);
+
+                if (recvEvent == IntPtr.Zero)
                 {
-                    packetData = null;
+                    Debug.WriteLine("Failed to initialize receive IO event.");
+                    continue;
+                }
 
-                    readLen = 0;
+                addr.Reset();
 
-                    recvAsyncIoLen = 0;
-                    recvOverlapped = new NativeOverlapped();
+                recvOverlapped.EventHandle = recvEvent;
 
-                    recvEvent = Kernel32.CreateEvent(IntPtr.Zero, false, false, IntPtr.Zero);
+                if (!WinDivert.WinDivertRecvEx(handle, packet, 0, ref addr, ref readLen, ref recvOverlapped))
+                {
+                    var error = Marshal.GetLastWin32Error();
 
-                    if (recvEvent == IntPtr.Zero)
+                    // 997 == ERROR_IO_PENDING
+                    if (error != 997)
                     {
-                        Debug.WriteLine("Failed to initialize receive IO event.");
+                        Kernel32.CloseHandle(recvEvent);
                         continue;
                     }
 
-                    addr.Reset();
+                    while (Kernel32.WaitForSingleObject(recvEvent, 1000) == (uint)WaitForSingleObjectResult.WaitTimeout && s_running)
+                        ;
 
-                    recvOverlapped.EventHandle = recvEvent;
-
-                    if (!WinDivert.WinDivertRecvEx(handle, packet, 0, ref addr, ref readLen, ref recvOverlapped))
+                    if (!Kernel32.GetOverlappedResult(handle, ref recvOverlapped, ref recvAsyncIoLen, false))
                     {
-                        var error = Marshal.GetLastWin32Error();
-
-                        // 997 == ERROR_IO_PENDING
-                        if (error != 997)
-                        {
-                            Kernel32.CloseHandle(recvEvent);
-                            continue;
-                        }
-
-                        while (Kernel32.WaitForSingleObject(recvEvent, 1000) == (uint)WaitForSingleObjectResult.WaitTimeout)
-                            ;
-
-                        if (!Kernel32.GetOverlappedResult(handle, ref recvOverlapped, ref recvAsyncIoLen, false))
-                        {
-                            Debug.WriteLine("Failed to get overlapped result.");
-                            Kernel32.CloseHandle(recvEvent);
-                            continue;
-                        }
-
-                        readLen = recvAsyncIoLen;
+                        Debug.WriteLine("Failed to get overlapped result.");
+                        Kernel32.CloseHandle(recvEvent);
+                        continue;
                     }
 
-                    Kernel32.CloseHandle(recvEvent);
+                    readLen = recvAsyncIoLen;
+                }
 
-                    Debug.WriteLine(String.Format("Read packet {0}", readLen));
+                Kernel32.CloseHandle(recvEvent);
 
-                    WinDivertParseResult result = WinDivert.WinDivertHelperParsePacket(packet, readLen);
+                Debug.WriteLine(String.Format("Read packet {0}", readLen));
 
-                    if (addr.Direction == WinDivertDirection.Inbound)
+                WinDivertParseResult result = WinDivert.WinDivertHelperParsePacket(packet, readLen);
+
+                if (addr.Direction == WinDivertDirection.Inbound)
+                {
+                    Debug.WriteLine("inbound!");
+                }
+                string srcAddr = "";
+                string dstAddr = "";
+                string payload = "";
+                unsafe
+                {
+                    if (result.IPv4Header != null)
                     {
-                        Debug.WriteLine("inbound!");
+                        Debug.WriteLine($"V4 TCP packet {addr.Direction} from {result.IPv4Header->SrcAddr} to {result.IPv4Header->DstAddr}");
+                        srcAddr = result.IPv4Header->SrcAddr.ToString();
+                        dstAddr = result.IPv4Header->DstAddr.ToString();
+                        //payload = System.Text.Encoding.Default.GetString(result.PacketPayload, (int) result.PacketPayloadLength);
                     }
-                    string srcAddr = "";
-                    string dstAddr = "";
-                    string payload = "";
-                    unsafe
-                    {
-                        if (result.IPv4Header != null)
-                        {
-                            Debug.WriteLine($"V4 TCP packet {addr.Direction} from {result.IPv4Header->SrcAddr} to {result.IPv4Header->DstAddr}");
-                            srcAddr = result.IPv4Header->SrcAddr.ToString();
-                            dstAddr = result.IPv4Header->DstAddr.ToString();
-                            //payload = System.Text.Encoding.Default.GetString(result.PacketPayload, (int) result.PacketPayloadLength);
-                        }
-                    }
+                }
 
-                    if (packetData != null)
-                    {
-                        Debug.WriteLine(String.Format("Packet has {0} byte payload.", packetData.Length));
-                    }
+                if (packetData != null)
+                {
+                    Debug.WriteLine(String.Format("Packet has {0} byte payload.", packetData.Length));
+                }
 
-                    /*Debug.WriteLine($"{nameof(addr.Direction)} - {addr.Direction}");
-                    Debug.WriteLine($"{nameof(addr.Impostor)} - {addr.Impostor}");
-                    Debug.WriteLine($"{nameof(addr.Loopback)} - {addr.Loopback}");
-                    Debug.WriteLine($"{nameof(addr.IfIdx)} - {addr.IfIdx}");
-                    Debug.WriteLine($"{nameof(addr.SubIfIdx)} - {addr.SubIfIdx}");
-                    Debug.WriteLine($"{nameof(addr.Timestamp)} - {addr.Timestamp}");
-                    Debug.WriteLine($"{nameof(addr.PseudoIPChecksum)} - {addr.PseudoIPChecksum}");
-                    Debug.WriteLine($"{nameof(addr.PseudoTCPChecksum)} - {addr.PseudoTCPChecksum}");
-                    Debug.WriteLine($"{nameof(addr.PseudoUDPChecksum)} - {addr.PseudoUDPChecksum}");*/
+                /*Debug.WriteLine($"{nameof(addr.Direction)} - {addr.Direction}");
+                Debug.WriteLine($"{nameof(addr.Impostor)} - {addr.Impostor}");
+                Debug.WriteLine($"{nameof(addr.Loopback)} - {addr.Loopback}");
+                Debug.WriteLine($"{nameof(addr.IfIdx)} - {addr.IfIdx}");
+                Debug.WriteLine($"{nameof(addr.SubIfIdx)} - {addr.SubIfIdx}");
+                Debug.WriteLine($"{nameof(addr.Timestamp)} - {addr.Timestamp}");
+                Debug.WriteLine($"{nameof(addr.PseudoIPChecksum)} - {addr.PseudoIPChecksum}");
+                Debug.WriteLine($"{nameof(addr.PseudoTCPChecksum)} - {addr.PseudoTCPChecksum}");
+                Debug.WriteLine($"{nameof(addr.PseudoUDPChecksum)} - {addr.PseudoUDPChecksum}");*/
 
-                    // Debug.WriteLine(WinDivert.WinDivertHelperCalcChecksums(packet, ref addr, WinDivertChecksumHelperParam.All));
+                // Debug.WriteLine(WinDivert.WinDivertHelperCalcChecksums(packet, ref addr, WinDivertChecksumHelperParam.All));
 
-                    var p = new Packet(srcAddr, dstAddr, payload);
-                    if (HandlePacket(p) && !WinDivert.WinDivertSendEx(handle, packet, readLen, 0, ref addr))
-                    {
-                        Debug.WriteLine(String.Format("Write Err: {0}", Marshal.GetLastWin32Error()));
-                    }
+                var p = new Packet(srcAddr, dstAddr, payload);
+                if (HandlePacket(p) && !WinDivert.WinDivertSendEx(handle, packet, readLen, 0, ref addr))
+                {
+                    Debug.WriteLine(String.Format("Write Err: {0}", Marshal.GetLastWin32Error()));
                 }
             }
             while (s_running);
